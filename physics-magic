@@ -1,0 +1,114 @@
+#!/usr/bin/env python3
+"""
+Usage:
+    physics-magic (higgs | wormhole)
+
+Options:
+    -h --help  Show this help message and exit.
+"""
+
+import matplotlib.pyplot as plt
+import numpy as np
+from docopt import docopt
+from PIL import Image
+
+
+def plot_depthmap(ax, x, y, z):
+    elev_rad = np.deg2rad(ax.elev)
+    azim_rad = np.deg2rad(ax.azim)
+    dist = ax._dist
+    # first, get the camera coordinates
+    x_camera = dist * np.cos(elev_rad) * np.cos(azim_rad)
+    y_camera = dist * np.cos(elev_rad) * np.sin(azim_rad)
+    z_camera = dist * np.sin(elev_rad)
+    # get distance from each point to the camera
+    distance_from_camera = -np.sqrt((x - x_camera)**2 + (y - y_camera)**2, + (z - z_camera)**2)
+    # normalize distance between 0 and 1
+    normalized_distance = (distance_from_camera - distance_from_camera.min()) / (distance_from_camera.max() - distance_from_camera.min())
+    # map it to a grascale
+    colors = plt.cm.gray(normalized_distance)
+    # plot it!
+    ax.plot_surface(x, y, z, facecolors=colors, shade=False, rcount=200, ccount=200)
+
+def plot_higgs(ax):
+    rho = np.linspace(0, 2, 200)
+    phi = np.linspace(0, 2*np.pi, 200)
+    Rho, Phi = np.meshgrid(rho, phi)
+    X, Y, Z = Rho * np.cos(Phi), Rho * np.sin(Phi), -5 * np.power(np.abs(Rho), 2) + np.power(np.abs(Rho), 4)
+    plot_depthmap(ax, X, Y, Z)
+
+
+def plot_wormhole(ax):
+    # from https://arxiv.org/abs/1107.4871
+    from scipy.integrate import quad
+    from scipy.special import lambertw
+    v0 = 0.99
+    def r(u, v):
+        return 2 * (1 + np.real(lambertw((np.square(u) - np.square(v)) / np.e)))
+
+    def z_integrand(r, v):
+        return np.sqrt(2 * (np.exp(r / 2) - np.square(v)) / (r * np.exp(r / 2) - 2 * (np.exp(r / 2) - np.square(v))))
+
+    def z(u, v):
+        return quad(z_integrand, r(0, v), r(u, v), args=(v,))[0]
+
+    z_vec = np.vectorize(z)
+    u = np.linspace(-1, 1, 100)
+    phi = np.linspace(0, 2*np.pi, 200)
+    U, Phi = np.meshgrid(u, phi)
+    R = r(U, v0)
+    # z doesn't quite get to 0 due to precision
+    X, Y, Z = R * np.cos(Phi), R * np.sin(Phi), z_vec(U, v0) - 0.08
+    plot_depthmap(ax, X, Y, Z)
+    # need to plot a flipped version to get the other half
+    plot_depthmap(ax, X, Y, -Z)
+
+
+def create_image(filename, plotting_function):
+    # make the background black
+    plt.style.use('dark_background')
+    # I think facecolor also does something
+    fig = plt.figure(figsize=(8, 8), facecolor='k')
+    ax = fig.add_subplot(projection='3d')
+    # get rid of the axes
+    plt.axis('off')
+
+    # plot our function
+    plotting_function(ax)
+
+    # this will kind of zoom it in artificially
+    fig.subplots_adjust(top=1.2, bottom=-.2, left=-0.2, right=1.2, wspace=0, hspace=0)
+    plt.savefig(filename, dpi=200)
+
+def run_algorithm(name, plotting_function):
+    filename = f'{name}.png'
+    create_image(filename, plotting_function)
+    # updated version of https://github.com/synesthesiam/magicpy
+    # by Michael Hansen (mihansen@indiana.edu)
+    depth_map = Image.open(filename).convert('L')
+    depth_data = depth_map.load()
+    width, height = depth_map.size
+    output_data = np.zeros((width, height), dtype=np.uint8)
+    pattern_width = width // 10
+    rng = np.random.default_rng()
+    pattern = rng.integers(0, 256, size=(pattern_width, height))
+    for x in range(width):
+        for y in range(height):
+            if x < pattern_width:
+                output_data[x, y] = pattern[x, y]
+            else:
+                shift = depth_data[x, y] // 10
+                output_data[x, y] = output_data[x - pattern_width + shift, y]
+    output_img = Image.fromarray(np.transpose(output_data, (1, 0)))
+    output_img.save(f'magic-{filename}')
+
+def main():
+    args = docopt(__doc__)
+    if args['higgs']:
+        run_algorithm('higgs', plot_higgs)
+    elif args['wormhole']:
+        run_algorithm('wormhole', plot_wormhole)
+
+
+if __name__ == '__main__':
+    main()
